@@ -10,9 +10,9 @@ import { Label } from '@/components/ui/label'
 import {
   Event,
   Location,
-  currentUser,
 } from '@/lib/data'
 import { getSupabaseClient, hasSupabaseEnv } from '@/lib/supabaseClient'
+import { isLoggedIn, getCurrentUser, User } from '@/lib/auth'
 import { MapPin, Share2, XCircle, Lightbulb, CheckCircle2 } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
@@ -24,11 +24,22 @@ export default function EventDetailPage() {
   const [selectedLocations, setSelectedLocations] = useState<string[]>([])
   const [vetoedLocationId, setVetoedLocationId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
+
+  // 检查用户登录状态
+  useEffect(() => {
+    if (isLoggedIn()) {
+      setCurrentUser(getCurrentUser())
+    } else {
+      // 如果未登录，重定向到登录页面
+      window.location.href = '/login'
+    }
+  }, [])
 
   // 从 Supabase 加载事件数据
   const loadEventFromSupabase = async () => {
-    if (!hasSupabaseEnv) {
-      console.error('Supabase 环境变量未配置')
+    if (!hasSupabaseEnv || !currentUser) {
+      console.error('Supabase 环境变量未配置或用户未登录')
       router.push('/')
       return
     }
@@ -40,6 +51,7 @@ export default function EventDetailPage() {
         .from('activities')
         .select('*')
         .eq('id', eventId)
+        .eq('user_id', currentUser.id)
         .single()
 
       if (error) {
@@ -139,7 +151,7 @@ export default function EventDetailPage() {
 
       // 设置用户否决的地点
       const userVetoedLoc = mappedEvent.recommendedLocations?.find(loc =>
-        loc.vetoedBy?.includes(currentUser.name)
+        loc.vetoedBy?.includes(currentUser.username)
       );
       if (userVetoedLoc) {
         setVetoedLocationId(userVetoedLoc.id);
@@ -153,8 +165,21 @@ export default function EventDetailPage() {
   }
 
   useEffect(() => {
-    loadEventFromSupabase()
-  }, [eventId])
+    if (currentUser) {
+      loadEventFromSupabase()
+    }
+  }, [currentUser])
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-orange-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">加载中...</p>
+        </div>
+      </div>
+    )
+  }
 
   if (isLoading) {
     return (
@@ -174,7 +199,7 @@ export default function EventDetailPage() {
 
   const isRsvpDeadlinePassed = event.rsvpDeadline ? new Date() > new Date(event.rsvpDeadline) : false;
   const isReconfirmationDeadlinePassed = event.reconfirmationDeadline ? new Date() > new Date(event.reconfirmationDeadline) : false; // New: Reconfirmation deadline check
-  const isInitiator = event.initiatorName === currentUser.name;
+  const isInitiator = event.initiatorName === currentUser.username;
 
   const isEventDatePassed = () => {
     const eventDateObj = new Date(event.date);
@@ -217,10 +242,13 @@ export default function EventDetailPage() {
 
       // 更新参与者列表
       let newParticipants = [...event.participants]
-      if (status === '已参加' && !newParticipants.some(p => p.name === currentUser.name)) {
-        newParticipants.push(currentUser)
+      if (status === '已参加' && !newParticipants.some(p => p.name === currentUser.username)) {
+        newParticipants.push({
+          name: currentUser.username,
+          avatar: currentUser.avatar
+        })
       } else if (status !== '已参加') {
-        newParticipants = newParticipants.filter(p => p.name !== currentUser.name)
+        newParticipants = newParticipants.filter(p => p.name !== currentUser.username)
       }
 
       const { error: participantsError } = await supabase
@@ -292,12 +320,12 @@ export default function EventDetailPage() {
         if (selectedLocations.includes(loc.id)) {
           currentVotes += 1;
         }
-        if (vetoedLocationId === loc.id && !currentVetoedBy.includes(currentUser.name)) {
-          currentVetoedBy.push(currentUser.name);
+        if (vetoedLocationId === loc.id && !currentVetoedBy.includes(currentUser.username)) {
+          currentVetoedBy.push(currentUser.username);
           currentVotes = 0;
         }
 
-        if (!currentVetoedBy.includes(currentUser.name)) {
+        if (!currentVetoedBy.includes(currentUser.username)) {
           if (Math.random() < 0.1 && !currentVetoedBy.includes('其他用户A')) {
             currentVetoedBy.push('其他用户A');
             currentVotes = 0;
@@ -401,11 +429,14 @@ export default function EventDetailPage() {
       // 更新确认参与者列表
       let newConfirmedParticipants = [...(event.confirmedParticipants || [])]
       if (status === '已确认参加') {
-        if (!newConfirmedParticipants.some(p => p.name === currentUser.name)) {
-          newConfirmedParticipants.push(currentUser)
+        if (!newConfirmedParticipants.some(p => p.name === currentUser.username)) {
+          newConfirmedParticipants.push({
+            name: currentUser.username,
+            avatar: currentUser.avatar
+          })
         }
       } else {
-        newConfirmedParticipants = newConfirmedParticipants.filter(p => p.name !== currentUser.name)
+        newConfirmedParticipants = newConfirmedParticipants.filter(p => p.name !== currentUser.username)
       }
 
       const { error: participantsError } = await supabase

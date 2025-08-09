@@ -30,9 +30,6 @@ export interface Event {
   reconfirmationDeadline?: string; // New: Deadline for final participant reconfirmation
 }
 
-// Simulate current user
-export const currentUser = { avatar: '/placeholder.svg?height=32&width=32', name: '当前用户' };
-
 // Dummy data for events (using let so it can be modified)
 export let events: Event[] = [
   {
@@ -48,7 +45,6 @@ export let events: Event[] = [
       { avatar: '/placeholder.svg?height=32&width=32', name: '王五' },
       { avatar: '/placeholder.svg?height=32&width=32', name: '赵六' },
       { avatar: '/placeholder.svg?height=32&width=32', name: '钱七' },
-      currentUser, // Add current user to a voting event for testing
     ],
     recommendedLocations: [
       { id: 'loc1', name: '剧本杀A馆', address: '上海市徐汇区天钥桥路1号', votes: 3 },
@@ -166,17 +162,16 @@ export let events: Event[] = [
     description: '这是一个测试所有地点都被否决的活动，由当前用户发起。',
     budgetRange: '不限',
     participants: [
-      currentUser,
       { avatar: '/placeholder.svg?height=32&width=32', name: '测试否决者A' },
       { avatar: '/placeholder.svg?height=32&width=32', name: '测试否决者B' },
     ],
     recommendedLocations: [
-      { id: 'loc9', name: '测试地点X', address: '测试地址X', vetoedBy: [currentUser.name, '测试否决者A'], votes: 0 },
-      { id: 'loc10', name: '测试地点Y', address: '测试地址Y', vetoedBy: [currentUser.name, '测试否决者B'], votes: 0 },
+      { id: 'loc9', name: '测试地点X', address: '测试地址X', vetoedBy: ['测试否决者A'], votes: 0 },
+      { id: 'loc10', name: '测试地点Y', address: '测试地址Y', vetoedBy: ['测试否决者B'], votes: 0 },
     ],
     allVetoed: true,
     rsvpDeadline: '2025-08-19 23:59',
-    initiatorName: currentUser.name,
+    initiatorName: '测试否决者A',
   },
   {
     id: '8',
@@ -186,14 +181,13 @@ export let events: Event[] = [
     description: '这是一个测试最终地点已确定，需要发起人确认参与人员的活动。',
     budgetRange: '¥100-200',
     participants: [
-      currentUser,
       { avatar: '/placeholder.svg?height=32&width=32', name: '参与者甲' },
       { avatar: '/placeholder.svg?height=32&width=32', name: '参与者乙' },
       { avatar: '/placeholder.svg?height=32&width=32', name: '参与者丙' },
     ],
     finalLocation: { id: 'loc11', name: '最终咖啡馆', address: '上海市某区某路123号' },
     rsvpDeadline: '2025-08-24 12:00',
-    initiatorName: currentUser.name,
+    initiatorName: '参与者甲',
     recommendedLocations: [
       { id: 'loc11', name: '最终咖啡馆', address: '上海市某区某路123号', votes: 5 },
       { id: 'loc12', name: '备选茶馆', address: '上海市某区某路456号', votes: 2 },
@@ -214,11 +208,11 @@ export function addEvent(newEvent: Omit<Event, 'id' | 'status' | 'participants' 
     ...newEvent,
     id: newId,
     status: '需要你响应', // Default status for new events
-    participants: [currentUser], // Initiator is the first participant
-    userRsvpStatus: '已参加', // Initiator automatically "参加"
-    initiatorName: currentUser.name, // Set initiator name
-    confirmedParticipants: [currentUser], // Initiator is confirmed by default
-    userReconfirmationStatus: '已确认参加', // Initiator automatically reconfirms
+    participants: [], // Empty participants array
+    userRsvpStatus: undefined, // No user RSVP status initially
+    initiatorName: '', // Will be set by the caller
+    confirmedParticipants: [], // Empty confirmed participants array
+    userReconfirmationStatus: undefined, // No user reconfirmation status initially
   }
   events.push(eventToAdd)
   return eventToAdd
@@ -277,11 +271,9 @@ export function updateUserReconfirmationStatus(id: string, participant: Particip
       newConfirmedParticipants = newConfirmedParticipants.filter(p => p.name !== participant.name);
     }
 
-    // Update the specific user's reconfirmation status if it's the current user
+    // Update the specific user's reconfirmation status
     const updatedEvent = { ...event, confirmedParticipants: newConfirmedParticipants };
-    if (participant.name === currentUser.name) {
-      updatedEvent.userReconfirmationStatus = status;
-    }
+    // Note: userReconfirmationStatus should be handled by the caller
     events[eventIndex] = updatedEvent;
   }
 }

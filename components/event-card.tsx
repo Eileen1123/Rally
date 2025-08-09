@@ -1,6 +1,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
-import { Event, currentUser } from '@/lib/data' // Import Event interface and currentUser
+import { Event } from '@/lib/data' // Import Event interface
+import { getCurrentUser } from '@/lib/auth' // Import user authentication
 
 interface EventCardProps {
   event: Event // Pass the entire event object
@@ -8,6 +9,7 @@ interface EventCardProps {
 
 export function EventCard({ event }: EventCardProps) {
   const { id, name, date, status, participants, userRsvpStatus, initiatorName, confirmedParticipants } = event;
+  const currentUser = getCurrentUser();
 
   // Helper to determine if event date has passed
   const isEventDatePassed = () => {
@@ -55,7 +57,7 @@ export function EventCard({ event }: EventCardProps) {
   };
 
   const currentDisplayStatus = getDisplayStatus();
-  const isInitiator = initiatorName === currentUser.name;
+  const isInitiator = currentUser && initiatorName === currentUser.username;
 
   // Determine which participant list to display for avatars
   const displayParticipants = (status === '结果已出' && confirmedParticipants && confirmedParticipants.length > 0)

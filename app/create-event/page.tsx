@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { getSupabaseClient, hasSupabaseEnv } from '@/lib/supabaseClient'
-import { currentUser } from '@/lib/data'
+import { isLoggedIn, getCurrentUser, User } from '@/lib/auth'
 
 export default function CreateEventPage() {
   const router = useRouter()
@@ -24,6 +24,17 @@ export default function CreateEventPage() {
   const [reconfirmationDate, setReconfirmationDate] = useState('') // New: Reconfirmation deadline date
   const [reconfirmationTime, setReconfirmationTime] = useState('') // New: Reconfirmation deadline time
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
+
+  // 检查用户登录状态
+  useEffect(() => {
+    if (isLoggedIn()) {
+      setCurrentUser(getCurrentUser())
+    } else {
+      // 如果未登录，重定向到登录页面
+      window.location.href = '/login'
+    }
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -32,8 +43,8 @@ export default function CreateEventPage() {
       return
     }
 
-    if (!hasSupabaseEnv) {
-      alert('Supabase 环境未配置，无法创建活动！')
+    if (!hasSupabaseEnv || !currentUser) {
+      alert('Supabase 环境未配置或用户未登录，无法创建活动！')
       return
     }
 
@@ -49,10 +60,14 @@ export default function CreateEventPage() {
         status: '需要你响应',
         description: description || null,
         budget_range: budgetRange || null,
-        participants: [currentUser], // 直接使用数组，Supabase 会自动转换为 JSON
+        participants: [{
+          name: currentUser.username,
+          avatar: currentUser.avatar
+        }], // 直接使用数组，Supabase 会自动转换为 JSON
         rsvp_deadline: rsvpDate && rsvpTime ? `${rsvpDate} ${rsvpTime}` : null,
-        initiator_name: currentUser.name,
+        initiator_name: currentUser.username,
         reconfirmation_deadline: reconfirmationDate && reconfirmationTime ? `${reconfirmationDate} ${reconfirmationTime}` : null,
+        user_id: currentUser.id,
       }
 
       const { data, error } = await supabase
@@ -74,6 +89,18 @@ export default function CreateEventPage() {
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  // 如果未登录，显示加载状态
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-orange-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">加载中...</p>
+        </div>
+      </div>
+    )
   }
 
   return (

@@ -3,10 +3,11 @@
 import { useState, useEffect, useMemo } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { Plus, RefreshCw } from 'lucide-react'
+import { Plus, RefreshCw, LogOut } from 'lucide-react'
 import { EventCard } from '@/components/event-card'
-import { Event, currentUser } from '@/lib/data'
+import { Event } from '@/lib/data'
 import { getSupabaseClient, hasSupabaseEnv } from '@/lib/supabaseClient'
+import { isLoggedIn, getCurrentUser, clearUserSession, User } from '@/lib/auth'
 
 type ConnectionState =
   | { status: 'idle' }
@@ -24,7 +25,18 @@ export default function HomePage() {
   const [events, setEvents] = useState<Event[]>([])
   const [conn, setConn] = useState<ConnectionState>({ status: 'idle' })
   const [isLoading, setIsLoading] = useState(false)
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
   const canConnect = useMemo(() => hasSupabaseEnv, [])
+
+  // 检查用户登录状态
+  useEffect(() => {
+    if (isLoggedIn()) {
+      setCurrentUser(getCurrentUser())
+    } else {
+      // 如果未登录，重定向到登录页面
+      window.location.href = '/login'
+    }
+  }, [])
 
   const mapActivityToEvent = (row: any): Event => {
     // 确保 participants 是数组
@@ -106,7 +118,7 @@ export default function HomePage() {
   }
 
   const loadFromSupabase = async () => {
-    if (!canConnect) return
+    if (!canConnect || !currentUser) return
     
     setIsLoading(true)
     try {
@@ -114,6 +126,7 @@ export default function HomePage() {
       const { data, error } = await supabase
         .from('activities')
         .select('*')
+        .eq('user_id', currentUser.id)
         .order('date', { ascending: false })
       if (error) throw error
       const rows = (data ?? []) as any[]
@@ -144,28 +157,34 @@ export default function HomePage() {
   }, [canConnect])
 
   useEffect(() => {
-    if (conn.status === 'connected') {
+    if (conn.status === 'connected' && currentUser) {
       loadFromSupabase()
     }
-  }, [conn.status])
+  }, [conn.status, currentUser])
 
   // 监听页面焦点，自动刷新数据
   useEffect(() => {
     const handleFocus = () => {
-      if (conn.status === 'connected') {
+      if (conn.status === 'connected' && currentUser) {
         loadFromSupabase()
       }
     }
 
     window.addEventListener('focus', handleFocus)
     return () => window.removeEventListener('focus', handleFocus)
-  }, [conn.status])
+  }, [conn.status, currentUser])
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('activeTab', activeTab)
     }
   }, [activeTab])
+
+  // 处理登出
+  const handleLogout = () => {
+    clearUserSession()
+    window.location.href = '/login'
+  }
 
   // 过滤逻辑与原先保持一致
   const filteredEvents = events.filter(event => {
@@ -180,23 +199,45 @@ export default function HomePage() {
     } else if (activeTab === 'history') {
       return isEventDatePassed
     } else if (activeTab === 'my-initiated') {
-      return event.initiatorName === currentUser.name
+      return event.initiatorName === currentUser?.username
     }
     return true
   })
+
+  // 如果未登录，显示加载状态
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-orange-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">加载中...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="bg-gray-50 min-h-screen flex flex-col">
       {/* Header */}
       <header className="bg-white p-4 flex justify-between items-center shadow-sm">
         <h1 className="text-xl font-bold text-orange-500">碰头吧 Rally</h1>
-        <Image
-          src="/placeholder.svg?height=40&width=40"
-          width={40}
-          height={40}
-          alt="User Avatar"
-          className="w-10 h-10 rounded-full cursor-pointer"
-        />
+        <div className="flex items-center space-x-4">
+          <span className="text-sm text-gray-600">欢迎，{currentUser.username}</span>
+          <Image
+            src={currentUser.avatar || "/placeholder.svg?height=40&width=40"}
+            width={40}
+            height={40}
+            alt="User Avatar"
+            className="w-10 h-10 rounded-full cursor-pointer"
+          />
+          <button
+            onClick={handleLogout}
+            className="flex items-center space-x-1 text-sm text-gray-600 hover:text-gray-800"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>登出</span>
+          </button>
+        </div>
       </header>
 
       {/* 连接状态条 */}
