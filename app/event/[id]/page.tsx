@@ -8,22 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import {
-  getEventById,
-  updateEventStatus,
-  updateParticipantStatus,
-  updateUserRsvpStatus,
-  updateUserReconfirmationStatus,
-  setEventFinalLocation,
-  setEventManualFinalLocation,
-  updateEventLocations,
-  setEventAllVetoed,
   Event,
   Location,
   currentUser,
 } from '@/lib/data'
+import { getSupabaseClient, hasSupabaseEnv } from '@/lib/supabaseClient'
 import { MapPin, Share2, XCircle, Lightbulb, CheckCircle2 } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-
 
 export default function EventDetailPage() {
   const params = useParams()
@@ -32,26 +23,151 @@ export default function EventDetailPage() {
   const [event, setEvent] = useState<Event | null>(null)
   const [selectedLocations, setSelectedLocations] = useState<string[]>([])
   const [vetoedLocationId, setVetoedLocationId] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
 
-  useEffect(() => {
-    const fetchedEvent = getEventById(eventId)
-    if (fetchedEvent) {
-      setEvent(fetchedEvent)
-      const userVetoedLoc = fetchedEvent.recommendedLocations?.find(loc =>
+  // 从 Supabase 加载事件数据
+  const loadEventFromSupabase = async () => {
+    if (!hasSupabaseEnv) {
+      console.error('Supabase 环境变量未配置')
+      router.push('/')
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('activities')
+        .select('*')
+        .eq('id', eventId)
+        .single()
+
+      if (error) {
+        console.error('加载事件失败:', error)
+        router.push('/')
+        return
+      }
+
+      if (!data) {
+        console.error('未找到事件')
+        router.push('/')
+        return
+      }
+
+      // 转换数据格式
+      const mapActivityToEvent = (row: any): Event => {
+        // 确保 participants 是数组
+        let participants = []
+        if (row.participants) {
+          if (typeof row.participants === 'string') {
+            try {
+              participants = JSON.parse(row.participants)
+            } catch (e) {
+              console.error('解析 participants 失败:', e)
+              participants = []
+            }
+          } else if (Array.isArray(row.participants)) {
+            participants = row.participants
+          }
+        }
+
+        // 确保 confirmedParticipants 是数组
+        let confirmedParticipants = undefined
+        if (row.confirmed_participants) {
+          if (typeof row.confirmed_participants === 'string') {
+            try {
+              confirmedParticipants = JSON.parse(row.confirmed_participants)
+            } catch (e) {
+              console.error('解析 confirmed_participants 失败:', e)
+              confirmedParticipants = []
+            }
+          } else if (Array.isArray(row.confirmed_participants)) {
+            confirmedParticipants = row.confirmed_participants
+          }
+        }
+
+        // 确保 recommendedLocations 是数组
+        let recommendedLocations = undefined
+        if (row.recommended_locations) {
+          if (typeof row.recommended_locations === 'string') {
+            try {
+              recommendedLocations = JSON.parse(row.recommended_locations)
+            } catch (e) {
+              console.error('解析 recommended_locations 失败:', e)
+            }
+          } else if (Array.isArray(row.recommended_locations)) {
+            recommendedLocations = row.recommended_locations
+          }
+        }
+
+        // 确保 finalLocation 是对象
+        let finalLocation = undefined
+        if (row.final_location) {
+          if (typeof row.final_location === 'string') {
+            try {
+              finalLocation = JSON.parse(row.final_location)
+            } catch (e) {
+              console.error('解析 final_location 失败:', e)
+            }
+          } else if (typeof row.final_location === 'object') {
+            finalLocation = row.final_location
+          }
+        }
+
+        return {
+          id: row.id,
+          name: row.name,
+          date: row.date,
+          status: row.status,
+          description: row.description ?? '',
+          budgetRange: row.budget_range ?? '',
+          participants: participants,
+          recommendedLocations: recommendedLocations,
+          finalLocation: finalLocation,
+          allVetoed: row.all_vetoed ?? undefined,
+          rsvpDeadline: row.rsvp_deadline ?? undefined,
+          userRsvpStatus: row.user_rsvp_status ?? undefined,
+          initiatorName: row.initiator_name ?? '',
+          confirmedParticipants: confirmedParticipants,
+          userReconfirmationStatus: row.user_reconfirmation_status ?? undefined,
+          reconfirmationDeadline: row.reconfirmation_deadline ?? undefined,
+        } as Event
+      }
+
+      const mappedEvent = mapActivityToEvent(data)
+      setEvent(mappedEvent)
+
+      // 设置用户否决的地点
+      const userVetoedLoc = mappedEvent.recommendedLocations?.find(loc =>
         loc.vetoedBy?.includes(currentUser.name)
       );
       if (userVetoedLoc) {
         setVetoedLocationId(userVetoedLoc.id);
       }
-    } else {
+    } catch (e: any) {
+      console.error('加载事件失败:', e)
       router.push('/')
+    } finally {
+      setIsLoading(false)
     }
-  }, [eventId, router])
+  }
+
+  useEffect(() => {
+    loadEventFromSupabase()
+  }, [eventId])
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center min-h-screen bg-gray-50">
+        <p className="text-gray-600">加载中...</p>
+      </div>
+    )
+  }
 
   if (!event) {
     return (
       <div className="flex justify-center items-center min-h-screen bg-gray-50">
-        <p className="text-gray-600">加载中...</p>
+        <p className="text-gray-600">事件不存在</p>
       </div>
     )
   }
@@ -78,29 +194,63 @@ export default function EventDetailPage() {
     return event.status;
   };
 
-  const handleRsvp = (status: Event['userRsvpStatus']) => {
+  const handleRsvp = async (status: Event['userRsvpStatus']) => {
     if (isRsvpDeadlinePassed) {
       alert('响应截止日期已过，无法更改响应状态。');
       return;
     }
 
-    updateUserRsvpStatus(event.id, status);
-    updateParticipantStatus(event.id, currentUser, status);
-    alert(`您已选择：${status}`);
+    try {
+      const supabase = getSupabaseClient()
+      
+      // 更新用户响应状态
+      const { error: rsvpError } = await supabase
+        .from('activities')
+        .update({ user_rsvp_status: status })
+        .eq('id', event.id)
 
-    setEvent(prevEvent => {
-      if (!prevEvent) return null;
-      const newParticipants = (status === '已参加' && !prevEvent.participants.some(p => p.name === currentUser.name))
-        ? [...prevEvent.participants, currentUser]
-        : prevEvent.participants.filter(p => p.name !== currentUser.name || status === '已参加');
-      return {
-        ...prevEvent,
-        userRsvpStatus: status,
-        participants: newParticipants,
-      };
-    });
+      if (rsvpError) {
+        console.error('更新响应状态失败:', rsvpError)
+        alert('更新失败，请重试')
+        return
+      }
 
-    router.push('/')
+      // 更新参与者列表
+      let newParticipants = [...event.participants]
+      if (status === '已参加' && !newParticipants.some(p => p.name === currentUser.name)) {
+        newParticipants.push(currentUser)
+      } else if (status !== '已参加') {
+        newParticipants = newParticipants.filter(p => p.name !== currentUser.name)
+      }
+
+      const { error: participantsError } = await supabase
+        .from('activities')
+        .update({ participants: newParticipants })
+        .eq('id', event.id)
+
+      if (participantsError) {
+        console.error('更新参与者列表失败:', participantsError)
+        alert('更新失败，请重试')
+        return
+      }
+
+      alert(`您已选择：${status}`)
+      
+      // 更新本地状态
+      setEvent(prevEvent => {
+        if (!prevEvent) return null
+        return {
+          ...prevEvent,
+          userRsvpStatus: status,
+          participants: newParticipants,
+        }
+      })
+
+      router.push('/')
+    } catch (e: any) {
+      console.error('更新失败:', e)
+      alert('更新失败，请重试')
+    }
   }
 
   const handleLocationVote = (locationId: string, isChecked: boolean) => {
@@ -123,99 +273,202 @@ export default function EventDetailPage() {
     }
   }
 
-  const handleSubmitVote = () => {
+  const handleSubmitVote = async () => {
     if (selectedLocations.length === 0 && !vetoedLocationId) {
       alert('请至少选择一个地点或否决一个地点。')
       return
     }
 
-    let finalChosenLocation: Location | undefined = undefined;
-    let allOptionsVetoed = false;
+    try {
+      const supabase = getSupabaseClient()
+      
+      let finalChosenLocation: Location | undefined = undefined;
+      let allOptionsVetoed = false;
 
-    const updatedLocationsWithVotes: Location[] = event.recommendedLocations?.map(loc => {
-      let currentVotes = loc.votes || 0;
-      let currentVetoedBy = loc.vetoedBy ? [...loc.vetoedBy] : [];
+      const updatedLocationsWithVotes: Location[] = event.recommendedLocations?.map(loc => {
+        let currentVotes = loc.votes || 0;
+        let currentVetoedBy = loc.vetoedBy ? [...loc.vetoedBy] : [];
 
-      if (selectedLocations.includes(loc.id)) {
-        currentVotes += 1;
-      }
-      if (vetoedLocationId === loc.id && !currentVetoedBy.includes(currentUser.name)) {
-        currentVetoedBy.push(currentUser.name);
-        currentVotes = 0;
-      }
-
-      if (!currentVetoedBy.includes(currentUser.name)) {
-        if (Math.random() < 0.1 && !currentVetoedBy.includes('其他用户A')) {
-          currentVetoedBy.push('其他用户A');
-          currentVotes = 0;
-        } else if (Math.random() < 0.5) {
-          currentVotes += Math.floor(Math.random() * 3);
+        if (selectedLocations.includes(loc.id)) {
+          currentVotes += 1;
         }
+        if (vetoedLocationId === loc.id && !currentVetoedBy.includes(currentUser.name)) {
+          currentVetoedBy.push(currentUser.name);
+          currentVotes = 0;
+        }
+
+        if (!currentVetoedBy.includes(currentUser.name)) {
+          if (Math.random() < 0.1 && !currentVetoedBy.includes('其他用户A')) {
+            currentVetoedBy.push('其他用户A');
+            currentVotes = 0;
+          } else if (Math.random() < 0.5) {
+            currentVotes += Math.floor(Math.random() * 3);
+          }
+        }
+
+        return { ...loc, votes: currentVotes, vetoedBy: currentVetoedBy };
+      }) || [];
+
+      const nonVetoedLocations = updatedLocationsWithVotes.filter(loc => !(loc.vetoedBy && loc.vetoedBy.length > 0));
+
+      if (nonVetoedLocations.length === 0) {
+        allOptionsVetoed = true;
+      } else {
+        finalChosenLocation = nonVetoedLocations.reduce((prev, current) => {
+          return (prev.votes || 0) > (current.votes || 0) ? prev : current;
+        }, nonVetoedLocations[0]);
       }
 
-      return { ...loc, votes: currentVotes, vetoedBy: currentVetoedBy };
-    }) || [];
+      let newStatus: Event['status']
+      if (allOptionsVetoed) {
+        newStatus = '所有选项均被否决'
+        alert('很遗憾，所有选项均被否决！')
+      } else if (finalChosenLocation) {
+        newStatus = '结果已出'
+        alert(`投票提交成功！最终地点：${finalChosenLocation.name}`)
+      } else {
+        newStatus = '投票中'
+        alert('投票提交成功，但未能确定最终地点。')
+      }
 
-    const nonVetoedLocations = updatedLocationsWithVotes.filter(loc => !(loc.vetoedBy && loc.vetoedBy.length > 0));
+      // 更新数据库
+      const updateData: any = {
+        status: newStatus,
+        recommended_locations: updatedLocationsWithVotes,
+      }
 
-    if (nonVetoedLocations.length === 0) {
-      allOptionsVetoed = true;
-    } else {
-      finalChosenLocation = nonVetoedLocations.reduce((prev, current) => {
-        return (prev.votes || 0) > (current.votes || 0) ? prev : current;
-      }, nonVetoedLocations[0]);
+      if (finalChosenLocation) {
+        updateData.final_location = finalChosenLocation
+      }
+
+      if (allOptionsVetoed) {
+        updateData.all_vetoed = true
+      }
+
+      const { error } = await supabase
+        .from('activities')
+        .update(updateData)
+        .eq('id', event.id)
+
+      if (error) {
+        console.error('更新投票结果失败:', error)
+        alert('投票提交失败，请重试')
+        return
+      }
+
+      // 更新本地状态
+      setEvent(prevEvent => {
+        if (!prevEvent) return null
+        return {
+          ...prevEvent,
+          status: newStatus,
+          finalLocation: finalChosenLocation || prevEvent.finalLocation,
+          allVetoed: allOptionsVetoed,
+          recommendedLocations: updatedLocationsWithVotes,
+        }
+      })
+    } catch (e: any) {
+      console.error('投票提交失败:', e)
+      alert('投票提交失败，请重试')
     }
-
-    if (allOptionsVetoed) {
-      updateEventStatus(event.id, '所有选项均被否决');
-      setEventAllVetoed(event.id, true, updatedLocationsWithVotes);
-      alert('很遗憾，所有选项均被否决！');
-    } else if (finalChosenLocation) {
-      setEventFinalLocation(event.id, finalChosenLocation, updatedLocationsWithVotes);
-      alert(`投票提交成功！最终地点：${finalChosenLocation.name}`);
-    } else {
-      alert('投票提交成功，但未能确定最终地点。');
-      updateEventStatus(event.id, '投票中');
-    }
-
-    setEvent(prevEvent => {
-      if (!prevEvent) return null;
-      return {
-        ...prevEvent,
-        status: allOptionsVetoed ? '所有选项均被否决' : (finalChosenLocation ? '结果已出' : '投票中'),
-        finalLocation: finalChosenLocation || prevEvent.finalLocation,
-        allVetoed: allOptionsVetoed,
-        recommendedLocations: updatedLocationsWithVotes,
-      };
-    });
   }
 
   const handleShare = () => {
     alert('活动详情已复制到剪贴板，可以分享给朋友了！')
   }
 
-  const handleReconfirmation = (status: '已确认参加' | '已拒绝参加') => {
-    if (isReconfirmationDeadlinePassed) { // New: Check reconfirmation deadline
+  const handleReconfirmation = async (status: '已确认参加' | '已拒绝参加') => {
+    if (isReconfirmationDeadlinePassed) {
       alert('最终确认截止日期已过，无法更改状态。');
       return;
     }
-    updateUserReconfirmationStatus(event.id, currentUser, status);
-    alert(`您已${status}本次活动。`);
-    setEvent(prevEvent => {
-      if (!prevEvent) return null;
-      return {
-        ...prevEvent,
-        userReconfirmationStatus: status,
-      };
-    });
+
+    try {
+      const supabase = getSupabaseClient()
+      
+      // 更新用户重新确认状态
+      const { error: statusError } = await supabase
+        .from('activities')
+        .update({ user_reconfirmation_status: status })
+        .eq('id', event.id)
+
+      if (statusError) {
+        console.error('更新重新确认状态失败:', statusError)
+        alert('更新失败，请重试')
+        return
+      }
+
+      // 更新确认参与者列表
+      let newConfirmedParticipants = [...(event.confirmedParticipants || [])]
+      if (status === '已确认参加') {
+        if (!newConfirmedParticipants.some(p => p.name === currentUser.name)) {
+          newConfirmedParticipants.push(currentUser)
+        }
+      } else {
+        newConfirmedParticipants = newConfirmedParticipants.filter(p => p.name !== currentUser.name)
+      }
+
+      const { error: participantsError } = await supabase
+        .from('activities')
+        .update({ confirmed_participants: newConfirmedParticipants })
+        .eq('id', event.id)
+
+      if (participantsError) {
+        console.error('更新确认参与者列表失败:', participantsError)
+        alert('更新失败，请重试')
+        return
+      }
+
+      alert(`您已${status}本次活动。`)
+      
+      // 更新本地状态
+      setEvent(prevEvent => {
+        if (!prevEvent) return null
+        return {
+          ...prevEvent,
+          userReconfirmationStatus: status,
+          confirmedParticipants: newConfirmedParticipants,
+        }
+      })
+    } catch (e: any) {
+      console.error('更新失败:', e)
+      alert('更新失败，请重试')
+    }
   };
 
-  const handleManualLocationSelect = (locationId: string) => {
+  const handleManualLocationSelect = async (locationId: string) => {
     const selectedLoc = event.recommendedLocations?.find(loc => loc.id === locationId);
     if (selectedLoc) {
-      setEventManualFinalLocation(event.id, selectedLoc);
-      setEvent(prev => prev ? { ...prev, status: '结果已出', finalLocation: selectedLoc, allVetoed: false } : null);
-      alert(`您已手动选择地点：${selectedLoc.name}`);
+      try {
+        const supabase = getSupabaseClient()
+        
+        const { error } = await supabase
+          .from('activities')
+          .update({
+            status: '结果已出',
+            final_location: selectedLoc,
+            all_vetoed: false
+          })
+          .eq('id', event.id)
+
+        if (error) {
+          console.error('手动选择地点失败:', error)
+          alert('选择失败，请重试')
+          return
+        }
+
+        setEvent(prev => prev ? { 
+          ...prev, 
+          status: '结果已出', 
+          finalLocation: selectedLoc, 
+          allVetoed: false 
+        } : null)
+        
+        alert(`您已手动选择地点：${selectedLoc.name}`)
+      } catch (e: any) {
+        console.error('手动选择地点失败:', e)
+        alert('选择失败，请重试')
+      }
     }
   }
 
